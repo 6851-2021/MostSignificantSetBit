@@ -1,8 +1,17 @@
+// Followed notes: 
+// https://courses.csail.mit.edu/6.851/spring21/lectures/L12.html?notes=8
+// https://courses.csail.mit.edu/6.851/spring21/scribe/lec12.pdf
+
 #include <stdint.h>
 #include <stdio.h>
 
-void print_binary64(uint64_t n) {
-  int32_t i = 63;
+// Some constants related to the algorithm
+const uint32_t rootW = 4; // sqrt(16)
+const uint16_t F = 0x8888;  
+const uint16_t M = 0x2490; // From perfect_sketch_const.py
+
+void print_binary(uint64_t n, uint32_t nbits) {
+  int32_t i = nbits - 1;
   for (; i >= 0; i--) {
     const uint64_t mask = 0b1LL << i;
     if (n & mask) {
@@ -11,28 +20,115 @@ void print_binary64(uint64_t n) {
       printf("0");
     }
 
-    // Print a divider every 8 bits
-    if (i % 8 == 0) {
+    // Print a divider every 8 bits, except after last byte
+    if (!(i % 8) && i) {
       printf("|");
     }
   }
   printf("\n");
 }
 
-// Set 1 in the constant time algorithm
-uint64_t identify_nonempty_clusters(uint64_t x) {
-  const uint32_t rootW = 8; // sqrt(64) = 8
-  const uint64_t F = 0x8080808080808080LL;
-  
-  const uint64_t first_bit_set = x & F;
-  const uint64_t remaining_bits = first_bit_set ^ x;
-  const uint64_t clusters_nonempty = (((F - remaining_bits) & F) ^ F) | first_bit_set;
+// Step 1 in the constant time algorithm
+uint16_t identify_nonempty_clusters(uint16_t x) {
+  const uint16_t first_bit_set = x & F;
+  const uint16_t remaining_bits = first_bit_set ^ x;
+  const uint16_t clusters_nonempty = (((F - remaining_bits) & F) ^ F) | first_bit_set;
 
-  print_binary64(clusters_nonempty);
+  return clusters_nonempty;
+}
+
+// Step 2
+uint64_t perfect_sketch(uint16_t x) {
+  const uint64_t interm_sketch = (uint64_t)x * M;
+  return (interm_sketch >> 16) & 0b1111;
+}
+
+// Step 3
+uint64_t parallel_comparison(uint64_t sketch) {
+  // For `sketch`s that are equivalent to a value in the `sketch_mode`,
+  // this parallel comparison will produce a `which_cluster` which is 
+  // is in the next cluster index (because it compares <= rather than <).
+  // Adding a 1, as long as it does not overflow will make the comparison
+  // a strict < instead
+  if (sketch != 0b1111) {
+    sketch += 1;
+  }
+
+  const uint64_t sketch_spaces = 0b00001000010000100001LL;
+  const uint64_t sketch_mode = 0b10001100101010011000LL;
+  const uint64_t sketch_k = sketch * sketch_spaces;
+
+  const uint64_t difference = sketch_mode - sketch_k;
+  const uint64_t monotonic = difference & 0b10000100001000010000LL;
+
+  const uint64_t count_ones = monotonic * sketch_spaces;
+  const uint64_t which_cluster = (count_ones >> 19) & 0b1111;
+
+  return 3 - which_cluster;
+}
+
+// Step 4
+uint64_t get_bit_d(uint16_t x, uint64_t which_cluster) {
+  // Get the `cluster_of_interest` in `x` based on `which_cluster`
+  const uint64_t cluster_shifted = x >> (which_cluster * rootW);
+  const uint64_t cluster_of_interest = cluster_shifted & 0b1111;
+
+  // Use the same `parallel_comparison` algorithm on the `cluster_of_interest`
+  const uint64_t bit_d = parallel_comparison(cluster_of_interest);
+  return bit_d;
+}
+
+// Putting everything together
+uint64_t const_time_most_significant_set_bit(uint16_t value) {
+  if (!value) {
+    printf("No bits set in 0x%x\n", value);
+    return (uint64_t)-1;    
+  }
+
+  const uint16_t clusters_nonempty = identify_nonempty_clusters(value);
+  const uint64_t sketch = perfect_sketch(clusters_nonempty);
+  const uint64_t which_cluster = parallel_comparison(sketch);
+
+  const uint64_t bit_d = get_bit_d(value, which_cluster);
+
+  const uint64_t answer = which_cluster * rootW + bit_d;
+  return answer;
+}
+
+uint32_t builtin_most_significant_set_bit(uint16_t value) {
+  if (!value) {
+    printf("No bits set in 0x%x\n", value);
+    return (uint32_t)-1;    
+  }
+
+  uint32_t leading_zeros = __builtin_clz(value);
+  return 31 - leading_zeros;
 }
 
 uint32_t main() {
-  identify_nonempty_clusters(0x0045627364125602LL);
+  const uint16_t value = 1;
+  const uint64_t const_time_mssb = const_time_most_significant_set_bit(value);
+  const uint32_t builtin_mssb = builtin_most_significant_set_bit(value);
+
+  /* printf("Value: ");
+   * print_binary(value, 16);
+   * printf("CONST TIME mssb: %ld\n", const_time_mssb);
+   * printf("BUILTIN mssb: %d\n", builtin_mssb); */
+
+  // Test case
+  for (uint32_t i = 0; i <= (uint16_t)-1; i++) {
+    printf("i: %d ", i);
+
+    const uint64_t const_time_mssb = const_time_most_significant_set_bit(i);
+    const uint32_t builtin_mssb = builtin_most_significant_set_bit(i);
+
+    if (const_time_mssb == builtin_mssb) {
+      printf("PASS\n");
+    } else {
+      printf("FAIL\n");
+      return 1;
+    }
+  }
 
   return 0;
 }
