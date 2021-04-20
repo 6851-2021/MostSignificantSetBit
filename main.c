@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+const uint32_t NO_SET_BITS = (uint32_t)-1;
+
 // Some constants related to the algorithm
 const uint32_t rootW = 4; // sqrt(16)
 const uint16_t F = 0x8888;  
@@ -38,13 +40,13 @@ uint16_t identify_nonempty_clusters(uint16_t x) {
 }
 
 // Step 2
-uint64_t perfect_sketch(uint16_t x) {
-  const uint64_t interm_sketch = (uint64_t)x * M;
+uint16_t perfect_sketch(uint16_t x) {
+  const uint32_t interm_sketch = (uint32_t)x * M;
   return (interm_sketch >> 16) & 0b1111;
 }
 
 // Step 3
-uint64_t parallel_comparison(uint64_t sketch) {
+uint32_t parallel_comparison(uint16_t sketch) {
   // For `sketch`s that are equivalent to a value in the `sketch_mode`,
   // this parallel comparison will produce a `which_cluster` which is 
   // is in the next cluster index (because it compares <= rather than <).
@@ -54,51 +56,49 @@ uint64_t parallel_comparison(uint64_t sketch) {
     sketch += 1;
   }
 
-  const uint64_t sketch_spaces = 0b00001000010000100001LL;
-  const uint64_t sketch_mode = 0b10001100101010011000LL;
-  const uint64_t sketch_k = sketch * sketch_spaces;
+  const uint32_t sketch_spaces = 0b00001000010000100001;
+  const uint32_t sketch_mode = 0b10001100101010011000;
+  const uint32_t sketch_k = sketch * sketch_spaces;
 
-  const uint64_t difference = sketch_mode - sketch_k;
-  const uint64_t monotonic = difference & 0b10000100001000010000LL;
+  const uint32_t difference = sketch_mode - sketch_k;
+  const uint32_t monotonic = difference & 0b10000100001000010000;
 
-  const uint64_t count_ones = monotonic * sketch_spaces;
-  const uint64_t which_cluster = (count_ones >> 19) & 0b1111;
+  const uint32_t count_ones = monotonic * sketch_spaces;
+  const uint32_t which_cluster = (count_ones >> 19) & 0b1111;
 
   return 3 - which_cluster;
 }
 
 // Step 4
-uint64_t get_bit_d(uint16_t x, uint64_t which_cluster) {
+uint32_t get_bit_d(uint16_t x, uint32_t which_cluster) {
   // Get the `cluster_of_interest` in `x` based on `which_cluster`
-  const uint64_t cluster_shifted = x >> (which_cluster * rootW);
-  const uint64_t cluster_of_interest = cluster_shifted & 0b1111;
+  const uint16_t cluster_shifted = x >> (which_cluster * rootW);
+  const uint16_t cluster_of_interest = cluster_shifted & 0b1111;
 
   // Use the same `parallel_comparison` algorithm on the `cluster_of_interest`
-  const uint64_t bit_d = parallel_comparison(cluster_of_interest);
+  const uint32_t bit_d = parallel_comparison(cluster_of_interest);
   return bit_d;
 }
 
 // Putting everything together
-uint64_t const_time_most_significant_set_bit(uint16_t value) {
+uint32_t const_time_most_significant_set_bit(uint16_t value) {
   if (!value) {
-    printf("No bits set in 0x%x\n", value);
-    return (uint64_t)-1;    
+    return NO_SET_BITS;
   }
 
   const uint16_t clusters_nonempty = identify_nonempty_clusters(value);
-  const uint64_t sketch = perfect_sketch(clusters_nonempty);
-  const uint64_t which_cluster = parallel_comparison(sketch);
+  const uint16_t sketch = perfect_sketch(clusters_nonempty);
+  const uint32_t which_cluster = parallel_comparison(sketch);
 
-  const uint64_t bit_d = get_bit_d(value, which_cluster);
+  const uint32_t bit_d = get_bit_d(value, which_cluster);
 
-  const uint64_t answer = which_cluster * rootW + bit_d;
+  const uint32_t answer = which_cluster * rootW + bit_d;
   return answer;
 }
 
 uint32_t builtin_most_significant_set_bit(uint16_t value) {
   if (!value) {
-    printf("No bits set in 0x%x\n", value);
-    return (uint32_t)-1;    
+    return NO_SET_BITS;
   }
 
   uint32_t leading_zeros = __builtin_clz(value);
@@ -117,15 +117,11 @@ uint32_t main() {
 
   // Test case
   for (uint32_t i = 0; i <= (uint16_t)-1; i++) {
-    printf("i: %d ", i);
-
     const uint64_t const_time_mssb = const_time_most_significant_set_bit(i);
     const uint32_t builtin_mssb = builtin_most_significant_set_bit(i);
 
-    if (const_time_mssb == builtin_mssb) {
-      printf("PASS\n");
-    } else {
-      printf("FAIL\n");
+    if (const_time_mssb != builtin_mssb) {
+      printf("i: %d FAIL\n", i);
       return 1;
     }
   }
