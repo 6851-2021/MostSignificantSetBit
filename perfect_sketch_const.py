@@ -17,4 +17,4 @@ def main(w):
     print("%x" % (m))
 
 if __name__ == "__main__":
-    main(64)
+    main(36)

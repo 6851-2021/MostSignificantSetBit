@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "mssb_16.h"
+#include "mssb_32.h"
 #include "mssb_64.h"
 #include "utils.h"
 
@@ -15,6 +16,7 @@ uint32_t main() {
   //
 
   test16();
+  test32();
   test64();
 
   return 0;
