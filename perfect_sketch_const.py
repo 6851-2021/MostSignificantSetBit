@@ -1,6 +1,8 @@
 import math
 
-def main(w, sqrtW):
+def main(w):
+    sqrtW = int(math.sqrt(w))
+
     # Compute which bits of `m` should be set to `1`
     m_bits = []
     for j in range(sqrtW):
@@ -15,4 +17,4 @@ def main(w, sqrtW):
     print("%x" % (m))
 
 if __name__ == "__main__":
-    main(16, 4)
+    main(64)
