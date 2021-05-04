@@ -2,6 +2,8 @@
 #include <stdint.h>
 
 #include "mssb_32.h"
+
+#include "mssb_16.h"
 #include "utils.h"
 
 // Some constants related to the algorithm
@@ -84,6 +86,27 @@ uint32_t builtin_most_significant_set_bit32(uint32_t value) {
   return 31 - leading_zeros;
 }
 
+uint32_t binary_search_most_significant_set_bit32(uint32_t value) {
+  uint32_t hi = value >> 16;
+  uint32_t lo = value & 0x0000ffff;
+
+  if (hi != 0) {
+    return binary_search_most_significant_set_bit16(hi) + 16;
+  } else {
+    return binary_search_most_significant_set_bit16(lo);
+  }
+}
+
+uint32_t iterative_most_significant_set_bit32(uint32_t value) {
+  uint32_t mssb = NO_SET_BITS;
+  while (value != 0) {
+    mssb += 1;
+    value >>= 1;
+  }
+
+  return mssb;
+}
+
 void scribbles32() {
   const uint32_t which_cluster = parallel_comparison(0b00000000);  
   printf("Which cluster %d\n", which_cluster);
@@ -94,12 +117,24 @@ bool test32() {
 
   // Count up all 16 bits, populating form the right
   for (uint32_t i = 0; i <= (uint16_t)-1; i++) {
-    const uint64_t const_time_mssb = const_time_most_significant_set_bit32(i);
     const uint32_t builtin_mssb = builtin_most_significant_set_bit32(i);
+    const uint32_t const_time_mssb = const_time_most_significant_set_bit32(i);
+    const uint32_t binary_search_mssb = binary_search_most_significant_set_bit32(i);
+    const uint32_t iterative_mssb = iterative_most_significant_set_bit32(i);
   
     if (const_time_mssb != builtin_mssb) {
-      printf("val: %d FAIL\n", i);
+      printf("CONST TIME: %d FAIL\n", i);
       return false;
+    }
+
+    if (binary_search_mssb != builtin_mssb) {
+      printf("BINARY SEARCH: %d FAIL\n", i);
+      return false;      
+    }
+
+    if (iterative_mssb != builtin_mssb) {
+      printf("ITERATIVE: %d FAIL\n", i);
+      return false;      
     }
   }
 
@@ -109,15 +144,84 @@ bool test32() {
     uint32_t bottom_bits = i & 0xFFFF;
     uint32_t value = bottom_bits << 16;
 
-    const uint64_t const_time_mssb = const_time_most_significant_set_bit32(value);
     const uint32_t builtin_mssb = builtin_most_significant_set_bit32(value);
+    const uint32_t const_time_mssb = const_time_most_significant_set_bit32(value);
+    const uint32_t binary_search_mssb = binary_search_most_significant_set_bit32(value);
+    const uint32_t iterative_mssb = iterative_most_significant_set_bit32(value);
   
     if (const_time_mssb != builtin_mssb) {
-      printf("val: %d FAIL\n", value);
+      printf("CONST TIME: %d FAIL\n", value);
       return false;
+    }
+
+    if (binary_search_mssb != builtin_mssb) {
+      printf("BINARY SEARCH: %d FAIL\n", i);
+      return false;      
+    }
+
+    if (iterative_mssb != builtin_mssb) {
+      printf("ITERATIVE: %d FAIL\n", i);
+      return false;      
     }
   }
 
   // All of the tests passed
   return true;
+}
+
+// TODO: Come up with a smarter iteration to test all representative cases
+static long double perf32_helper(uint32_t (*mssb_fn)(uint32_t), 
+                                 const uint32_t n_iters,
+                                 const uint32_t n_calls) {
+  const uint32_t MAX_VALUE = (uint32_t)-1;
+
+  // The location to store all of the run times
+  long double run_times[n_iters];
+
+  // Time the builtin function
+  for (uint32_t i = 0; i < n_iters; i++) {
+    const uint32_t value = i % MAX_VALUE;
+    
+    clock_t start_clk = clock();
+
+    // Measure the time to perform `n_calls` function calls
+    for (uint32_t j = 0; j < n_calls; j++) {
+      // Do not optimize out the function call
+      volatile uint32_t ret = mssb_fn(value);
+    }
+
+    clock_t end_clk = clock();
+
+    run_times[i] = (end_clk - start_clk) / (long double)CLOCKS_PER_SEC;
+  }
+
+  /* // Debugging, print the run times
+   * for (uint32_t i = 0; i < n_iters; i++) {
+   *   printf("%Lg ", run_times[i]);
+   * }
+   * printf("\n"); */
+
+  // Return the average run time
+  return average(run_times, n_iters);
+}
+
+void perf32(uint32_t n_iters, uint32_t n_calls) {
+  long double avg_run_time;
+
+  printf("=== 32bit Most Significant Set Bit ===\n");
+
+  avg_run_time = perf32_helper(builtin_most_significant_set_bit32, n_iters, n_calls);
+  printf("BUILTIN: %Lg sec\n", avg_run_time);  
+
+  avg_run_time = perf32_helper(const_time_most_significant_set_bit32, n_iters, n_calls);
+  printf("CONST TIME: %Lg sec\n", avg_run_time);  
+
+  avg_run_time = perf32_helper(binary_search_most_significant_set_bit32, n_iters, n_calls);
+  printf("BINARY SEARCH: %Lg sec\n", avg_run_time);  
+
+  avg_run_time = perf32_helper(iterative_most_significant_set_bit32, n_iters, n_calls);
+  printf("ITERATIVE: %Lg sec\n", avg_run_time);  
+  
+  //avg_run_time = perf16_helper(comparison_most_significant_set_bit16, n_iters, n_calls);
+  //printf("COMPARISON: %Lg sec\n", avg_run_time);
 }

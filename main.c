@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "mssb_8.h"
 #include "mssb_16.h"
 #include "mssb_32.h"
 #include "mssb_64.h"
@@ -15,9 +16,18 @@ uint32_t main() {
   // Test the different bit functions
   //
 
+  test8();
   test16();
   test32();
   test64();
+
+  const uint32_t n_iters = 100000;
+  const uint32_t n_calls = 1000;
+
+  perf8(n_iters, n_calls);
+  perf16(n_iters, n_calls);
+  perf32(n_iters, n_calls);
+  perf64(n_iters, n_calls);
 
   return 0;
 }
