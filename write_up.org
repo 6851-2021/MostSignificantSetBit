@@ -1,0 +1,164 @@
+#+TITLE: Write-Up for 6.851 Final Project \linebreak A Performance Study of Most Significant Set Bit \linebreak Constant Time and Other Algorithms 
+#+AUTHOR: Damian Barabonkov
+
+\pagebreak
+
+* Overview
+This project implements a number of algorithms to compute the Most Significant Set Bit (MSSB) of a binary number. MSSB returns the index, counting from right to left, of the leftmost 1 in the binary digit. For example, the MSSB of ~0b00100101~ is 5.
+
+This project provides various algorithms for MSSB on 8-bit, 16-bit, 32-bit and 64-bit words. The principal focus is to gain practical experience and performance results for the constant time MSSB algorithm from lecture 12 of 6.851. All algorithms are compared against a benchmark ~__builtin_clz~ function which is a built-in x86 instruction to effectively perform MSSB. The algorithms are compared against the benchmark for correctness in the test suite functions and for performance.
+
+The following table lists the algorithms implemented for each word size. Not all algorithms are possible for every word size, hence the discrepancy. Each algorithm is described below in the next chapter.
+
+#+attr_latex: :align l|l
+| Word Size | Algorithms                                       |
+|-----------+--------------------------------------------------|
+| 8-bit     | ~built-in, lookup table, iterative, comparison~  |
+|-----------+--------------------------------------------------|
+| 16-bit    | ~built-in, const time, binary search,~           |
+|           | ~lookup table, iterative, comparison~            |
+|-----------+--------------------------------------------------|
+| 32-bit    | ~built-in, const time, binary search, iterative~ |
+|-----------+--------------------------------------------------|
+| 64-bit    | ~built-in, const time, binary search, iterative~ |
+
+* Most Significant Set Bit Algorithms
+** Built-In
+This algorithm uses the built-in x86 instruction ~__builtin_clz~ for 32-bit words and less and ~__builtin_clzll~ for 64-bit words. This algorithm is the benchmark for this project, both for correctness and performance.
+** Lookup Table
+This algorithm uses a pre-generated lookup table to compute the MSSB. In its simplest form, an input ~digit~ is used as an index into a lookup table. The value at that index corresponds exactly to the MSSB value of ~digit~. This relationship is computed during the generation of the lookup table. This approach is only viable for the 8-bit words, and with difficulty, the 16-bit words. The 8-bit table easily fits in cache. The 16-bit table is quite large, and any larger bit tables are too big to be practical.
+** Iterative
+This is the most naive approach. Simply iterate and shift the input ~digit~ rightward until the leftmost 1 eventually is shifted out. A counter keeps track of the number of times the ~digit~ was shifted. At the end, this counter will be the MSSB index.
+** Comparison 
+This method is inspired by the structure of the lookup table. For large swaths of values, the MSSB is the same. The lookup table can be simplified into a series of comparison. If the value is larger than a threshold, 1 is added. Depending on how big the input ~digit~ is, it will be larger than exactly however many thresholds when summed is the MSSB.
+
+The following code is an example comparison implementation for the 8-bit words. The larger word sizes have the same structure.
+
+#+BEGIN_SRC C
+uint32_t comparison_most_significant_set_bit8(uint8_t value) {
+  const uint32_t bit0 = value > 0;
+  const uint32_t bit1 = value > 0b1;
+  const uint32_t bit2 = value > 0b11;
+  const uint32_t bit3 = value > 0b111;
+  const uint32_t bit4 = value > 0b1111;
+  const uint32_t bit5 = value > 0b11111;
+  const uint32_t bit6 = value > 0b111111;
+  const uint32_t bit7 = value > 0b1111111;
+
+  return (bit0 + bit1 + bit2 + bit3 +
+          bit4 + bit5 + bit6 + bit7);
+}
+#+END_SRC
+
+** Binary Search
+This approach uses recursion and the algorithms of smaller word sizes in order to compute the MSSB of a larger word size. For example, a comparison of the upper half and lower half of a larger word, say 64-bit, reduces the problem to a 32-bit word. This can make its way down to a base case of an 8-bit algorithm.
+
+** Constant Time
+This algorithm follows directly from lecture 12 of 6.851. The algorithm is constant time by using bit tricks to compare and aggregate multiple segments of the input word in one operation. There are two implementation challenges involved with the constant time algorithm.
+
+1. A word is split into ~sqrt(w)~ size chunks where ~w~ is the word size. For word sizes of 16-bit and 64-bit, this is not an issue since they are squares. However, the 32-bit word size cannot be split in even chunks. This issue is mitigated by treating a 32-bit word as if it were a 36-bit number. The larger number resides in ~uint64_t~ variables and the upper 4 bits are never set. However, now chunks are of size 6 which works with the algorithm.
+2. Twice during the algorithm, chucks are multiplied and the result that must be fetched ends up in bit locations greater than ~w~. This is not an issue for the smaller word sizes since it is always possible to use a larger word size for the overflow operation. For example, a 16-bit word operation that needs the overflow bits can place that value in a 32-bit word, perform the operation and then retrieve the desired bits beyond the 16th bit straightforwardly. However, with a 64-bit word size, the x86 architecture does not have words larger than 64 bits. Some additional attention is needed for the overflow bits. Conveniently, in x86 assembly, whenever two 64 bit values are multiplied, the lower 64 bits of the result is stored in the ~rax~ register and the overflow bits are stored in the ~rdx~ register. These register values are not easily directly accessible in C, but some inline assembly solves this problem.
+3. The ~parallel_comparison~ step of the 64-bit algorithm compares sketches in order to find which is the leftmost cluster. The issue is that each sketch-space is 9-bits wide (8-bits + 1-bit to cover carries). With 8 sketch-spaces of 9-bits, this overflows the 64-bit boundary. This is resolved by have a special case for the leftmost sketch-space which is only ever set if the input ~sketch~ is 0. By checking if it is 0 initially, then the leftmost sketch may be omitted if it is non-zero. This results in 7 sketch-spaces of 9-bits which is 63 total bits which just fits in the 64-bit word. 
+
+*** Overflow bits
+The following code was adapted from the StackOverflow post at: \newline https://stackoverflow.com/questions/31652875/ \newline
+\url{fastest-way-to-multiply-two-64-bit-ints-to-128-bit-then-to-64-bit}
+
+   #+BEGIN_SRC
+uint64_t mulshift64(uint64_t a, uint64_t b, uint64_t *_regular_bits) {
+  uint64_t overflow_bits, regular_bits;
+
+    __asm__ (
+        "movq  %2, %%rax;\n\t"          // rax = a
+        "imulq %3;\n\t"                 // rdx:rax = a * b
+        "movq  %%rdx, %0;\n\t"          // `overflow_bits` = rdx
+        "movq  %%rax, %1;\n\t"          // `regular_bits` = rax
+        : "=rm" (overflow_bits), "=rm" (regular_bits)
+        : "rm"(a), "rm"(b)
+        : "%rax", "%rdx");
+
+    // If `_regular_bits` is non-NULL, set it to `regular_bits`
+    if (_regular_bits) {
+      *_regular_bits = regular_bits;
+    }
+
+    return overflow_bits;
+}
+   #+END_SRC
+ 
+This function returns the overflow bits stored in the ~rdx~ register. If a variable address is passed into ~_regular_bits~, then the lower 64-bits are in the ~rax~ register are set there.
+
+This function is used in two places in the 64-bit word size constant time MSSB algorithm. The first is in the ~perfect_sketch~ function. The perfect sketch is used to compress the bits from the ~identify_nonempty_clusters~ step into one chunk of bits. It involves a multiplication by a specific constant ~M~ that sends every bit from ~identify_nonempty_clusters~ to the same chunk just beyond the 64-bit word. The following code uses the ~mulshift64~ function to perform the ~perfect_sketch~.
+
+#+BEGIN_SRC
+static uint64_t perfect_sketch(uint64_t x) {
+  const uint64_t interm_sketch = mulshift64(x, M, NULL);
+  return interm_sketch & 0b11111111;
+}
+#+END_SRC
+
+The constant ~M~ is generated by a Python script "perfect_sketch_const.py" according to the lecture notes.
+
+The second use of the ~multshift64~ is in the ~parallel_comparison~ of the constant time MSSB algorithm. This step counts how many bits of the sketches are set by multiplying by a constant that fores each bit of the sketch to land in the same position just beyond the 64-bit word boundary. Since all of the bits land in the same spot, they will sum as a result of the multiplication operation. There is a caveat since, as mentioned in the 3rd challenge, the sketch-spaces sum up to 63-bits. So part of the solution is in the lower half of the bits and the other part in the overflow bits. The following code performs this counting operation:
+
+#+BEGIN_SRC
+uint64_t regular_bits;
+const uint64_t overflow_bits = 
+    mulshift64(monotonic, sketch_spaces, &regular_bits);
+const uint64_t which_cluster = 
+    ((overflow_bits & 0b111111) << 2) | (regular_bits >> 62) & 0b11;
+#+END_SRC
+
+* Code Layout and Usage
+The code layout consists of:
+
+- "main.c" -- Contains the ~main()~ function which calls the test cases and performance functions.
+- "mssb_8.c" -- Implements all of the MSSB algorithms pertaining to the 8-bit word size. It exposes only the relevant functions via "mssb_8.h".
+- "mssb_16.c" -- Implements all of the MSSB algorithms pertaining to the 16-bit word size. It exposes only the relevant functions via "mssb_16.h".
+- "mssb_32.c" -- Implements all of the MSSB algorithms pertaining to the 32-bit word size. It exposes only the relevant functions via "mssb_32.h".
+- "mssb_64.c" -- Implements all of the MSSB algorithms pertaining to the 64-bit word size. It exposes only the relevant functions via "mssb_64.h".
+- "utils.c" -- Contains helper functions like ~print_binary~ and ~average~.
+
+** Test Cases
+Every MSSB word size has a dedicated testing function which benchmarks against the ~__builtin_clz~ function. For the smaller word sizes, 8-bit and 16-bit, the search space is small enough to iterate through all possibilities and verify against the built-in function. The larger word sizes, 32-bit and 64-bit, iterate through a limited sub-space of the values. In particular, they iterate through all possibilities of the the bottom 16-bits set and the top 16-bits set. Again, the results are compared against the built-in function for correctness. If at any point, there is a discrepancy, the test case errors.
+
+Every MSSB algorithm passes all of the test cases.
+
+** Performance
+# TODO: Update values to be more representative of the entire serach space, especially for larger word sizes
+Every MSSB word size has a dedicated performance function. Performance runs are sub-divided into iterations and calls. A single iteration of the performance measurement calls the respective MSSB function being measured 1000 times on different values. The time it takes to execute these 1000 calls is recorded as a data point. A total performance trial involves 100,000 iterations, producing 100,000 data points whose average is the performance result. Timings are recorded using the ~clock()~ function of the ~<time.h>~ library converted to seconds using ~CLOCKS_PER_SEC~.
+
+* Performance Results
+The following tables summarizes the performance results for every MSSB word size. They are ordered from fastest to slowest.
+
+| 8-bit MSSB     | Execution Time (sec) |
+|----------------+----------------------|
+| ~lookup table~ |           9.7004e-07 |
+| ~comparison~   |           9.8837e-07 |
+| ~built-in~     |          1.01122e-06 |
+| ~iterative~    |          4.19195e-06 |
+
+| 16-bit MSSB     | Execution Time (sec) |
+|-----------------+----------------------|
+| ~lookup table~  |           9.7257e-07 |
+| ~built-in~      |           9.9255e-07 |
+| ~const time~    |          1.03555e-06 |
+| ~comparison~    |          1.31012e-06 |
+| ~binary search~ |          2.35541e-06 |
+| ~iterative~     |          6.53856e-06 |
+
+| 32-bit MSSB     | Execution Time (sec) |
+|-----------------+----------------------|
+| ~built-in~      |            9.675e-07 |
+| ~const time~    |          1.02594e-06 |
+| ~binary search~ |          3.65773e-06 |
+| ~iterative~     |          6.62721e-06 |
+
+| 64-bit MSSB     | Execution Time (sec) |
+|-----------------+----------------------|
+| ~built-in~      |           9.4086e-07 |
+| ~binary search~ |           4.6507e-06 |
+| ~const time~    |          5.16203e-06 |
+| ~iterative~     |          6.84478e-06 |
+
+Interestingly, the constant time MSSB algorithm is competitive with the built-in function for the 16-bit and 32-bit word sizes. It suffers greatly for the 64-bit word size, possibly because of the ~mulshift64~ being unable to be optimized. These performance numbers also show that a lookup table beats any alternative. If a lookup table is infeasible, the next best option is the built-in function.

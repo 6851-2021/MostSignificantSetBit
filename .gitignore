@@ -1,2 +1,5 @@
 *.o
 main
+
+*.tex
+*.pdf
